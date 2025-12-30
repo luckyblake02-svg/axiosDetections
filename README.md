@@ -1,106 +1,257 @@
-***
+# axiosDetections
 
-# Risk Insight Scanner
+This repository contains three Python scripts that work together to detect risky Azure AD users, enrich events with AbuseIPDB data, alert responders via email, and optionally automate response when Azure sends “user at risk” notifications.
 
-A Python asyncio-based utility that integrates Delinea Secret Server, Microsoft Graph Beta, and AbuseIPDB to identify risky users, fetch their risk detections and sign-in events, and optionally retrieve additional context about IP addresses.
-
-***
-
-## Features
-
-- Retrieves and uses a Secret Server secret via a Password Grant flow.
-- Authenticates to Microsoft Graph Beta using a certificate credential.
-- Queries risky users and their associated risk detections and sign-in events.
-- Optional per-user risk event enrichment by querying AbuseIPDB for IP addresses.
-- Interactive prompts to selectively view risk detections and sign-ins.
-- Runs asynchronously for efficient data retrieval.
+> Note: Replace placeholder values (tenant IDs, app IDs, emails, secret IDs, paths, and environment variable names) with values appropriate for your environment.
 
 ***
 
-## Requirements
+## Overview
 
-- Python 3.8+ (async features used)
-- Dependencies (install via pip):
-  - asyncio (standard)
-  - requests
-  - delinea-secrets
-  - msgraph-beta
-  - azure-identity
-  - kiota-abstractions
-- Environment variables:
-  - env variable storing the Secret Server password (name as used in code)
-  - env variable storing AbuseIPDB API key (name as used in code)
-
-- External services:
-  - Delinea Secret Server (accessible at the site URL)
-  - Microsoft Graph (with appropriate permissions)
-  - AbuseIPDB (for IP reputation data)
-
-Note: The script contains placeholder values (e.g., site, tenant_id, client_id, cert_path, etc.) that you must replace with your actual environment configuration.
-
-***
-
-## Setup
-
-1. Create a Python virtual environment (optional but recommended):
-   - python -m venv venv
-   - source venv/bin/activate (Linux/macOS) or venv\Scripts\activate (Windows)
-
-2. Install dependencies:
-   - pip install requests delinea-secrets msgraph-beta azure-identity kiota-abstractions
-
-3. Configure secrets and credentials:
-   - Secret Server password: set an environment variable (the code reads it via os.environ with your chosen name).
-   - AbuseIPDB API key: set an environment variable named as in the code (env variable placeholder).
-
-4. Update script placeholders with real values:
-   - Secret Server site URL (site)
-   - Secret number or retrieval method (currently secret = ss_client.get_secret(number); ensure you pass the correct secret number)
-   - Azure/Tenant details:
-     - tenant_id
-     - client_id
-     - cert_path
-   - Graph scopes (if needed)
-   - Any other literal placeholders (tenant id, app id, path to certificate, etc.)
-
-5. Ensure your environment variables are accessible to the script, for example:
-   - export YOUR_SECRET_PASSWORD="your-secret-password" (on Unix)
-   - export ABUSEIPDB_API_KEY="your-abuseipdb-key"
-
-***
-
-## How to Run
-
-- Simply run the script:
-  - python script_name.py
-
-- The script executes as a console application:
-  - It authenticates to Secret Server and Graph.
-  - Fetches risky users for today.
-  - For each risky user, it fetches risk detections and sign-ins in parallel.
-  - Prompts to display risk detections and sign-ins.
-  - If users opt to see detections, it queries AbuseIPDB for each IP and prints a summary.
-  - If sign-ins are requested, it prints sign-in details and flags known bad user agents (e.g., Axios).
-
-***
-
-## Important Notes
-
-- Security:
-  - The script uses secrets from Secret Server and a certificate-based Graph authentication flow. Treat all credentials as highly sensitive.
-  - Avoid logging sensitive data in production environments. The current script prints several fields for debugging; consider redacting PII or implementing a secure logging strategy.
-  - Ensure proper access controls and least-privilege permissions for the service principals and Secrets.
-
-- Error handling:
-  - The main function has a broad try/except to print errors and dump a traceback. In a production setting, you’d want structured error handling and possibly retry logic for transient failures.
-
-- Customization:
-  - The filter strings for risky users and events are built as Graph beta query parameters. Adjust the filters to reflect your organization’s risk criteria and data retention.
-  - The IP checks rely on AbuseIPDB’s API; you may wish to add rate limiting or alternative IP intelligence sources.
-
-- Extensibility:
-  - The script uses asyncio.gather to parallelize detections and sign-in lookups. It can be extended to include additional data sources or to persist results to a file or database.
+- **Script 1 – Risky Axios Console Detector**  
+  Interactive, console-based tool that queries Microsoft Graph Identity Protection for risky users, enriches their detections and sign-ins, and highlights sign-ins using the `axios` user agent.
+- **Script 2 – Risky Axios Email Reporter**  
+  Non-interactive script that collects similar data, builds a consolidated text report, and emails it to a defined distribution list.
+- **Script 3 – Risky Axios Outlook Watcher**  
+  Windows/Outlook watcher that polls the inbox for specific Azure “user at risk” notifications and, when found, invokes a headless axios detection script.
 
 ---
 
+## Prerequisites
+
+### Common
+
+- Python 3.8+  
+- Network access to:
+  - Microsoft Graph (`https://graph.microsoft.com`)  
+  - AbuseIPDB API (`https://api.abuseipdb.com`)  
+  - Your Delinea Secret Server instance  
+
+- Access to:
+  - **Azure AD / Microsoft Graph**
+    - App registration with certificate-based authentication
+    - Permissions to read Identity Protection data (`riskyUsers`, `riskDetections`) and sign-in logs
+    - For Script 2: permission to send mail as the configured sender
+  - **Delinea Secret Server**
+    - API user with rights to read the secret containing the certificate passphrase
+  - **AbuseIPDB**
+    - API key for the `check` endpoint
+
+### Script 3 Specific
+
+- Windows host with Outlook installed and configured for the target mailbox  
+- `pywin32` installed (for `win32com.client`)  
+- The headless axios detection script (`axiosHeadless`) available on the Python path
+
+---
+
+## Setup & Installation
+
+1. **Clone the repository**
+
+```bash
+git clone https://github.com/luckyblake02-svg/axiosDetections.git
+cd axiosDetections
+```
+
+2. **Create and activate a virtual environment (recommended)**
+
+```bash
+python -m venv venv
+# Linux/macOS
+source venv/bin/activate
+# Windows
+venv\Scripts\activate
+```
+
+3. **Install dependencies**
+
+Typical packages used across the scripts:
+
+- `delinea.secrets.server`
+- `azure-identity` (for `CertificateCredential`)
+- `msgraph-beta`, `msgraph`, `kiota-abstractions`
+- `requests`
+- `pywin32` (for Script 3)
+
+4. **Configure environment variables**
+
+Set these environment variables as appropriate:
+
+- Secret Server API user password for Delinea:
+  - `env variable` – used in `ssToken()` in Script 1 and Script 2
+- AbuseIPDB API key:
+  - `env variable` (Script 1)  
+  - `abuseAPI` (Script 2)
+
+You can set them in your shell, in a secrets manager, or as part of your host configuration.
+
 ***
+
+## Script 1 – Risky Axios Console Detector
+
+### Purpose
+
+Queries Microsoft Graph Identity Protection for risky users updated today, retrieves related risk detections and sign-ins, enriches IP information with AbuseIPDB, and prints results to the console, with special emphasis on sign-ins using the `axios` user agent.
+
+### Key Behavior
+
+- Authenticates to Delinea Secret Server using a password grant to retrieve a certificate passphrase.  
+- Uses `CertificateCredential` and the Microsoft Graph beta client to access Identity Protection APIs.  
+- Filters `riskyUsers` where:
+  - `riskState` is `atRisk`
+  - `riskLastUpdatedDateTime` is on or after the current date  
+- For each risky user:
+  - Shows user principal name, risk level, and risk state
+  - In parallel:
+    - Fetches Identity Protection risk detections (`risk_detections`)
+    - Fetches recent sign-ins (`audit_logs.sign_ins`)  
+  - Optionally prints risk detections and AbuseIPDB data for each detection IP:
+    - Abuse confidence score
+    - Country code
+    - ISP
+    - Domain
+    - Total reports
+    - Last reported time  
+  - Optionally prints sign-in events:
+    - App display name
+    - Timestamp
+    - User agent
+    - Flags any sign-in where `user_agent == 'axios'` with a warning to trigger a phishing playbook
+
+### Configuration Points
+
+Inside the script, update:
+
+- Secret Server:
+  - `site` – Secret Server base URL (e.g., `https://secretserver/SecretServer`)
+  - `username` – Secret Server API account
+  - `secret number` – ID of the secret holding the certificate passphrase
+- Azure:
+  - `tenant_id` – Azure tenant ID
+  - `client_id` – app registration client ID
+  - `cert_path` – path to the certificate file
+
+### Running Script 1
+
+```bash
+python riskyAxiosInteractive.py
+```
+
+You will be prompted whether to display detections and sign-ins for each risky user and will see warnings for `axios` user agent sign-ins.
+
+***
+
+## Script 2 – Risky Axios Email Reporter
+
+### Purpose
+
+Fetches a (small, configurable) set of risky users and their related detections and sign-ins, enriches detection IPs with AbuseIPDB data, builds a plain-text summary, and sends it as an email to a set of recipients using Microsoft Graph.
+
+### Key Behavior
+
+- Uses the same Delinea Secret Server + certificate-based Graph authentication pattern as Script 1.  
+- Filters `riskyUsers` with:
+  - `riskState` = `atRisk`
+  - `riskLastUpdatedDateTime` on or after today
+  - `top=1` risky user (configurable)  
+- For that user:
+  - Collects:
+    - UPN
+    - Risk level
+    - Risk state  
+  - Uses `asyncio.gather` to get:
+    - Up to `top=3` risk detections
+    - Up to `top=3` sign-ins  
+  - For each detection:
+    - Queries AbuseIPDB for the detection IP and appends the abuse metadata to the message body  
+  - For each sign-in:
+    - Appends app display name, timestamp, and user agent
+    - Appends a warning if `user_agent == 'axios'`  
+- Builds a `Message` (Graph `sendMail`) with:
+  - Subject: `Risky User Information`
+  - Body: the assembled text
+  - To: two configured recipients
+  - Sender: configured mailbox (`by_user_id('sender email')`)
+  - Saves a copy to Sent Items
+
+### Configuration Points
+
+Inside the script, update:
+
+- Secret Server:
+  - `site`, `username`, `get_secret(####)` (ID of secret containing certificate passphrase)
+- Azure:
+  - `tenant_id`, `client_id`, `cert_path`
+- Email:
+  - Recipient addresses in:
+    - `recipient = Recipient(email_address=EmailAddress(address='email1'))`
+    - `recipient2 = Recipient(email_address=EmailAddress(address='email2'))`
+  - Sender mailbox in:
+    - `graph_client.users.by_user_id('sender email')`
+
+You can also adjust the `top` values for risky users, detections, and sign-ins to broaden or reduce the volume of data.
+
+### Running Script 2
+
+```bash
+python riskyAxiosEmailReport.py
+```
+
+On completion, recipients should receive a consolidated text report summarizing risky user activity and any axios-related warnings.
+
+---
+
+## Script 3 – Risky Axios Outlook Watcher
+
+### Purpose
+
+Runs on a Windows machine with Outlook installed, periodically polling the Inbox for specific Azure “user at risk detected” emails, and triggers a headless axios detection script when such alerts arrive.
+
+### Key Behavior
+
+- Uses `win32com.client` to:
+  - Attach to the default Outlook MAPI namespace
+  - Open the default Inbox (folder index `6`)  
+- On each poll:
+  - Iterates unread messages
+  - For each unread message:
+    - If `Subject == "User at risk detected"` and `SenderName == "azure-noreply@microsoft.com"`, executes the `axiosHeadless` script/module  
+- Sleeps for 600 seconds (10 minutes) between polls and runs indefinitely
+
+### Configuration Points
+
+Inside the script, you may want to:
+
+- Adjust the matching criteria:
+  - Subject: `"User at risk detected"`
+  - Sender: `"azure-noreply@microsoft.com"`  
+
+- Optionally mark processed messages as read or move them to a specific folder to avoid reprocessing on subsequent loops.
+
+### Running Script 3
+
+From a Windows machine with Outlook configured:
+
+```bash
+python riskyAxiosOutlookWatcher.py
+```
+
+Leave it running in the background (or configure it as a scheduled task/service) to keep watching for new Azure risk emails.
+
+***
+
+## Operational Flow Example
+
+A typical end‑to‑end use of these scripts might look like:
+
+1. **Detection & Reporting**
+   - Script 1 is used interactively by an analyst to investigate risky users and immediately see axios-based sign-ins.
+   - Script 2 runs on a schedule (e.g., via cron or Task Scheduler) to email summarized daily reports to a security distribution list.
+
+2. **Automation**
+   - Azure sends a “User at risk detected” email to a monitored mailbox.
+   - Script 3, running on a Windows host, detects the new email and triggers the `axiosHeadless` script.
+   - The headless script performs automated investigation or remediation steps (for example, disabling accounts, sending notifications, or updating tickets).
+
+Adjust the scripts and configuration to match your organization’s environment, naming standards, and response playbooks.
